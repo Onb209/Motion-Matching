@@ -9,6 +9,7 @@
 #include <float.h>
 #include <stdio.h>
 #include <math.h>
+#include <vector>
 
 //--------------------------------------
 
@@ -95,7 +96,86 @@ int database_trajectory_index_clamp(database& db, int frame, int offset)
     return -1;
 }
 
+int database_pushed_index_clamp(int frame, int offset)
+{
+    std::vector<int> start_frame = {0, 53,  115,  189,  290,  395,  485,  568,  687,  745,  825, 917, 1034, 1236, 1310};
+    std::vector<int> stop_frame = {53,  115,  189,  290,  395,  485,  568,  687,  745,  825, 917, 1034, 1236, 1310, 1705};
+    for (int i = 0; i < stop_frame.size(); i++)
+    {
+        if (frame >= start_frame[i] && frame < stop_frame[i])
+        {
+            return clamp(frame + offset, start_frame[i], stop_frame[i] - 1);
+        }
+    }
+    assert(false);
+    return -1;
+}
+
+
 //--------------------------------------
+void normalize_feature_vector(
+    slice2d<float> features,
+    slice1d<float> features_offset,
+    slice1d<float> features_scale,
+    const int offset, 
+    const int size, 
+    std::vector<float> weights)
+{
+    // First compute what is essentially the mean 
+    // value for each feature dimension
+    for (int j = 0; j < size; j++)
+    {
+        features_offset(offset + j) = 0.0f;    
+    }
+    
+    for (int i = 0; i < features.rows; i++)
+    {
+        for (int j = 0; j < size; j++)
+        {
+            features_offset(offset + j) += features(i, offset + j) / features.rows;
+        }
+    }
+    
+    // Now compute the variance of each feature dimension
+    array1d<float> vars(size);
+    vars.zero();
+    
+    for (int i = 0; i < features.rows; i++)
+    {
+        for (int j = 0; j < size; j++)
+        {
+            vars(j) += squaref(features(i, offset + j) - features_offset(offset + j)) / features.rows;
+        }
+    }
+    
+    // We compute the overall std of the feature as the average
+    // std across all dimensions
+    float std = 0.0f;
+    for (int j = 0; j < size; j++)
+    {
+        std += sqrtf(vars(j)) / size;
+    }
+    
+    // Features with no variation can have zero std which is
+    // almost always a bug.
+    assert(std > 0.0);
+    
+    // The scale of a feature is just the std divided by the weight
+    for (int j = 0; j < size; j++)
+    {
+        features_scale(offset + j) = std / weights[j];
+    }
+    
+    // Using the offset and scale we can then normalize the features
+    for (int i = 0; i < features.rows; i++)
+    {
+        for (int j = 0; j < size; j++)
+        {
+            features(i, offset + j) = (features(i, offset + j) - features_offset(offset + j)) / features_scale(offset + j);
+        }
+    }
+}
+
 
 void normalize_feature(
     slice2d<float> features,
@@ -375,7 +455,71 @@ void forward_kinematics_velocity_partial(
     global_bone_angular_velocities(bone) = quat_mul_vec3(parent_rotation, local_bone_angular_velocities(bone)) + parent_angular_velocity;
     global_bone_computed(bone) = true;
 }
+//--------------------------------------
+// void compute_motion_idx_feature(database& db, int& offset, float weight)
+// {
 
+//     for (int i = 0; i < db.nframes(); i++) {
+//         int stop_index = -1;
+//         for (int j = 1; j <= 7; j += 2) {
+//             if (i <= db.range_stops(j)) {
+//                 stop_index = j;
+//                 break;
+//             }
+//         }
+//         switch(stop_index) {
+//             case 1:
+//                 db.features(i, offset + 0) = 0;
+//                 break;
+//             case 3:
+//                 db.features(i, offset + 0) = 1;
+//                 break;
+//             case 5:
+//                 db.features(i, offset + 0) = 2;
+//                 break;
+//             case 7:
+//                 db.features(i, offset + 0) = 3;
+//                 break;
+//             // case 9:
+//             //     db.features(i, offset + 0) = 4;
+//             //     break;
+//         }
+//     }
+
+//     normalize_feature(db.features, db.features_offset, db.features_scale, offset, 1, weight);
+    
+//     offset += 1;
+// }
+
+void compute_motion_idx_feature(database& db, int& offset, float weight)
+{
+
+    for (int i = 0; i < db.range_stops(1); i++) {
+        db.features(i, offset + 0) = 0;
+    }
+    for (int i = db.range_stops(1); i < db.nframes(); i++) {
+        db.features(i, offset + 0) = 1;
+    }
+    // for (int i = db.range_stops(2); i < db.range_stops(3); i++) {
+    //     db.features(i, offset + 0) = 2;
+    // }
+    // for (int i = db.range_stops(3); i < db.range_stops(4); i++) {
+    //     db.features(i, offset + 0) = 3;
+    // }
+    // for (int i = db.range_stops(4); i < db.range_stops(4); i++) {
+    //     db.features(i, offset + 0) = 4;
+    // }
+    // for (int i = db.range_stops(5); i < db.range_stops(5); i++) {
+    //     db.features(i, offset + 0) = 5;
+    // }
+    // for (int i = db.range_stops(6); i < db.nframes(); i++) {
+    //     db.features(i, offset + 0) = 6;
+    // }
+
+    normalize_feature(db.features, db.features_offset, db.features_scale, offset, 1, weight);
+    
+    offset += 1;
+}
 //--------------------------------------
 
 // Compute a feature for the position of a bone relative to the simulation/root bone
@@ -395,7 +539,7 @@ void compute_bone_position_feature(database& db, int& offset, int bone, float we
             bone);
         
         bone_position = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), bone_position - db.bone_positions(i, 0));
-        
+
         db.features(i, offset + 0) = bone_position.x;
         db.features(i, offset + 1) = bone_position.y;
         db.features(i, offset + 2) = bone_position.z;
@@ -445,25 +589,54 @@ void compute_trajectory_position_feature(database& db, int& offset, float weight
 {
     for (int i = 0; i < db.nframes(); i++)
     {
-        int t0 = database_trajectory_index_clamp(db, i, 20);
-        int t1 = database_trajectory_index_clamp(db, i, 40);
-        int t2 = database_trajectory_index_clamp(db, i, 60);
+        int t0 = database_trajectory_index_clamp(db, i, 15);
+        int t1 = database_trajectory_index_clamp(db, i, 30);
+        int t2 = database_trajectory_index_clamp(db, i, 45);
         
         vec3 trajectory_pos0 = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), db.bone_positions(t0, 0) - db.bone_positions(i, 0));
         vec3 trajectory_pos1 = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), db.bone_positions(t1, 0) - db.bone_positions(i, 0));
         vec3 trajectory_pos2 = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), db.bone_positions(t2, 0) - db.bone_positions(i, 0));
-        
+
+        trajectory_pos0.y += db.bone_positions(t0, 1).y - db.bone_positions(i, 1).y;
+        trajectory_pos1.y += db.bone_positions(t1, 1).y - db.bone_positions(i, 1).y;
+        trajectory_pos2.y += db.bone_positions(t2, 1).y - db.bone_positions(i, 1).y;
+
         db.features(i, offset + 0) = trajectory_pos0.x;
-        db.features(i, offset + 1) = trajectory_pos0.z;
-        db.features(i, offset + 2) = trajectory_pos1.x;
-        db.features(i, offset + 3) = trajectory_pos1.z;
-        db.features(i, offset + 4) = trajectory_pos2.x;
-        db.features(i, offset + 5) = trajectory_pos2.z;
+        db.features(i, offset + 1) = trajectory_pos0.y;
+        db.features(i, offset + 2) = trajectory_pos0.z;
+        db.features(i, offset + 3) = trajectory_pos1.x;
+        db.features(i, offset + 4) = trajectory_pos1.y;
+        db.features(i, offset + 5) = trajectory_pos1.z;
+        db.features(i, offset + 6) = trajectory_pos2.x;
+        db.features(i, offset + 7) = trajectory_pos2.y;
+        db.features(i, offset + 8) = trajectory_pos2.z;
+
+
     }
     
-    normalize_feature(db.features, db.features_offset, db.features_scale, offset, 6, weight);
-    
-    offset += 6;
+    // normalize_feature(db.features, db.features_offset, db.features_scale, offset, 9, weight);
+    std::vector<float> weights;
+    for(int i=0;i<9;i++){
+        weights.push_back(weight);
+    }
+    weights[2] *= 0.25;
+    weights[5] *= 0.25;
+    weights[8] *= 0.25;
+    weights[1] *= 2.0;
+    weights[4] *= 2.0;
+    weights[7] *= 2.0;
+
+    weights[0] *= 0.75;
+    weights[3] *= 0.75;
+    weights[6] *= 0.75;
+
+    for(int i=0;i<3;i++){
+        weights[i] *= 2.0;
+    }
+
+    normalize_feature_vector(db.features, db.features_offset, db.features_scale, offset, 9, weights);
+    // 
+    offset += 9;
 }
 
 // Same for direction
@@ -471,9 +644,9 @@ void compute_trajectory_direction_feature(database& db, int& offset, float weigh
 {
     for (int i = 0; i < db.nframes(); i++)
     {
-        int t0 = database_trajectory_index_clamp(db, i, 20);
-        int t1 = database_trajectory_index_clamp(db, i, 40);
-        int t2 = database_trajectory_index_clamp(db, i, 60);
+        int t0 = database_trajectory_index_clamp(db, i, 15);
+        int t1 = database_trajectory_index_clamp(db, i, 30);
+        int t2 = database_trajectory_index_clamp(db, i, 45);
         
         vec3 trajectory_dir0 = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), quat_mul_vec3(db.bone_rotations(t0, 0), vec3(0, 0, 1)));
         vec3 trajectory_dir1 = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), quat_mul_vec3(db.bone_rotations(t1, 0), vec3(0, 0, 1)));
@@ -491,6 +664,84 @@ void compute_trajectory_direction_feature(database& db, int& offset, float weigh
 
     offset += 6;
 }
+
+void compute_other_position_feature(database& db, database& db2, int& offset, float weight = 1.0f)
+{
+    for (int i = 0; i < 1310; i++)
+    {
+        vec3 bone_position = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), db2.bone_positions(i,0) - db.bone_positions(i, 0));
+        
+        db.features(i, offset + 0) = bone_position.x;
+        db.features(i, offset + 1) = bone_position.z;
+    }
+    
+    normalize_feature(db.features, db.features_offset, db.features_scale, offset, 2, weight);
+    
+    offset += 2;
+}
+
+void compute_other_rotation_feature(database& db, database& db2, int& offset, float weight = 1.0f)
+{
+    for (int i = 0; i < 1310; i++)
+    {
+        vec3 bone_rotations = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), quat_mul_vec3(db2.bone_rotations(i, 0), vec3(0, 0, 1)));
+        
+        db.features(i, offset + 0) = bone_rotations.x;
+        db.features(i, offset + 1) = bone_rotations.z;
+    }
+    
+    normalize_feature(db.features, db.features_offset, db.features_scale, offset, 2, weight);
+    
+    offset += 2;
+}
+
+void compute_other_velocity_feature(database& db, database& db2, int& offset, float weight = 1.0f)
+{
+    for (int i = 0; i < db.nframes(); i++)
+    {   
+        vec3 bone_velocity = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), db2.bone_velocities(i, 0));
+        
+        db.features(i, offset + 0) = bone_velocity.x;
+        db.features(i, offset + 1) = bone_velocity.z;
+    }
+    
+    normalize_feature(db.features, db.features_offset, db.features_scale, offset, 2, weight);
+    
+    offset += 2;
+}
+
+void compute_chair_position_feature(database& db, int& offset, float weight = 1.0f)
+{
+    for (int i = db.range_starts(2); i < db.range_stops(20); i++) // 2 11 -> 14 23   2 20
+    { 
+        const vec3 chair_position = vec3{0.0, 0.0, 0.0};
+        vec3 pos = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), chair_position - db.bone_positions(i, 0));
+        
+        db.features(i, offset + 0) = pos.x;
+        db.features(i, offset + 1) = pos.z;
+    }
+    
+    normalize_feature(db.features, db.features_offset, db.features_scale, offset, 2, weight);
+    
+    offset += 2;
+}
+
+void compute_chair_direction_feature(database& db, int& offset, float weight = 1.0f)
+{
+    for (int i = db.range_starts(2); i < db.range_stops(20); i++)
+    {
+        const quat chair_direction = quat_from_angle_axis(0.0, vec3(0,0,1));
+        vec3 relative_chair_dir = quat_mul_vec3(quat_inv(db.bone_rotations(i, 0)), quat_mul_vec3(chair_direction, vec3(0, 0, 1)));
+
+        db.features(i, offset + 0) = relative_chair_dir.x;
+        db.features(i, offset + 1) = relative_chair_dir.z;
+    }
+
+    normalize_feature(db.features, db.features_offset, db.features_scale, offset, 2, weight);
+
+    offset += 2;
+}
+//-------------------------------------------------------------------------------------------------------------------------------------------
 
 // Build the Motion Matching search acceleration structure. Here we
 // just use axis aligned bounding boxes regularly spaced at BOUND_SM_SIZE
@@ -525,8 +776,68 @@ void database_build_bounds(database& db)
     }
 }
 
+//-------------------------------------------------------------------------------------------------------------
 // Build all motion matching features and acceleration structure
 void database_build_matching_features(
+    database& db,
+    database& db2,
+    const float feature_weight_foot_position,
+    const float feature_weight_foot_velocity,
+    const float feature_weight_hip_velocity,
+    const float feature_weight_trajectory_positions,
+    const float feature_weight_trajectory_directions,
+    const float feature_weight_chair_position,
+    const float feature_weight_chair_direction,
+    const float feature_weight_other)
+{
+
+    int nfeatures = 
+        3 + // Left Foot Position
+        3 + // Right Foot Position 
+        // 3 + // Hip Position 
+        3 + // Left Foot Velocity
+        3 + // Right Foot Velocity
+        3 + // Hip Velocity
+
+        9 + // Trajectory Positions 3D
+        6 + // Trajectory Directions 2D
+
+        2 +
+        2 +
+
+        2 +
+        2 ;
+
+        
+    db.features.resize(db.nframes(), nfeatures);
+    db.features_offset.resize(nfeatures);
+    db.features_scale.resize(nfeatures);
+    
+    int offset = 0;
+    // compute_motion_idx_feature(db, offset, feature_weight_motion_idx);
+    compute_bone_position_feature(db, offset, Bone_LeftFoot, feature_weight_foot_position);
+    compute_bone_position_feature(db, offset, Bone_RightFoot, feature_weight_foot_position);
+    // compute_bone_position_feature(db, offset, Bone_Hips, feature_weight_foot_position);
+    compute_bone_velocity_feature(db, offset, Bone_LeftFoot, feature_weight_foot_velocity);
+    compute_bone_velocity_feature(db, offset, Bone_RightFoot, feature_weight_foot_velocity);
+    compute_bone_velocity_feature(db, offset, Bone_Hips, feature_weight_hip_velocity);
+    
+    compute_trajectory_position_feature(db, offset, feature_weight_trajectory_positions);
+    compute_trajectory_direction_feature(db, offset, feature_weight_trajectory_directions);
+    
+    compute_chair_position_feature(db, offset, feature_weight_chair_position);
+    compute_chair_direction_feature(db, offset, feature_weight_chair_direction);
+
+    compute_other_position_feature(db, db2, offset, feature_weight_other);
+    compute_other_rotation_feature(db, db2, offset, feature_weight_other);
+    
+    assert(offset == nfeatures);
+    
+    database_build_bounds(db);
+}
+
+// Terrain
+void terrain_database_build_matching_features(
     database& db,
     const float feature_weight_foot_position,
     const float feature_weight_foot_velocity,
@@ -534,13 +845,14 @@ void database_build_matching_features(
     const float feature_weight_trajectory_positions,
     const float feature_weight_trajectory_directions)
 {
+
     int nfeatures = 
         3 + // Left Foot Position
         3 + // Right Foot Position 
         3 + // Left Foot Velocity
         3 + // Right Foot Velocity
         3 + // Hip Velocity
-        6 + // Trajectory Positions 2D
+        9 + // Trajectory Positions 3D
         6 ; // Trajectory Directions 2D
         
     db.features.resize(db.nframes(), nfeatures);
@@ -548,6 +860,7 @@ void database_build_matching_features(
     db.features_scale.resize(nfeatures);
     
     int offset = 0;
+    // compute_motion_idx_feature(db, offset, feature_weight_motion_idx);
     compute_bone_position_feature(db, offset, Bone_LeftFoot, feature_weight_foot_position);
     compute_bone_position_feature(db, offset, Bone_RightFoot, feature_weight_foot_position);
     compute_bone_velocity_feature(db, offset, Bone_LeftFoot, feature_weight_foot_velocity);
@@ -560,6 +873,108 @@ void database_build_matching_features(
     
     database_build_bounds(db);
 }
+
+// Chair
+void chair_database_build_matching_features(
+    database& db,
+    const float feature_weight_foot_position,
+    const float feature_weight_foot_velocity,
+    const float feature_weight_hip_velocity,
+    const float feature_weight_chair_position,
+    const float feature_weight_chair_direction)
+{
+    int nfeatures = 
+        3 + // Left Foot Position
+        3 + // Right Foot Position 
+        3 + // Left Foot Velocity
+        3 + // Right Foot Velocity
+        3 + // Hip Velocity
+        2 + // Relative 2D position of the chair local to the character
+        2 ; // Relative 2D facing direction of the chair local to the character
+        
+    db.features.resize(db.nframes(), nfeatures);
+    db.features_offset.resize(nfeatures);
+    db.features_scale.resize(nfeatures);
+    
+    int offset = 0;
+    compute_bone_position_feature(db, offset, Bone_LeftFoot, feature_weight_foot_position);
+    compute_bone_position_feature(db, offset, Bone_RightFoot, feature_weight_foot_position);
+    compute_bone_velocity_feature(db, offset, Bone_LeftFoot, feature_weight_foot_velocity);
+    compute_bone_velocity_feature(db, offset, Bone_RightFoot, feature_weight_foot_velocity);
+    compute_bone_velocity_feature(db, offset, Bone_Hips, feature_weight_hip_velocity);
+    compute_chair_position_feature(db, offset, feature_weight_chair_position);
+    compute_chair_direction_feature(db, offset, feature_weight_chair_direction);
+    
+    assert(offset == nfeatures);
+    
+    database_build_bounds(db);
+}
+
+// Push
+// pushing
+void pushing_database_build_matching_features(
+    database& db,
+    database& db2,
+    const float feature_weight_foot_position,
+    const float feature_weight_foot_velocity,
+    const float feature_weight_hip_velocity,
+    const float feature_weight_other)
+{
+
+    int nfeatures = 
+        3 + // Left Foot Position
+        3 + // Right Foot Position 
+        3 + // Left Foot Velocity
+        3 + // Right Foot Velocity
+        3 + // Hip Velocity
+        2 + // relative position to blue character
+        2 ; // relative rotation to blue character
+        
+    db.features.resize(db.nframes(), nfeatures);
+    db.features_offset.resize(nfeatures);
+    db.features_scale.resize(nfeatures);
+    
+    int offset = 0;
+    compute_bone_position_feature(db, offset, Bone_LeftFoot, feature_weight_foot_position);
+    compute_bone_position_feature(db, offset, Bone_RightFoot, feature_weight_foot_position);
+    compute_bone_velocity_feature(db, offset, Bone_LeftFoot, feature_weight_foot_velocity);
+    compute_bone_velocity_feature(db, offset, Bone_RightFoot, feature_weight_foot_velocity);
+    compute_bone_velocity_feature(db, offset, Bone_Hips, feature_weight_hip_velocity);
+    compute_other_position_feature(db, db2, offset, feature_weight_other);
+    compute_other_rotation_feature(db, db2, offset, feature_weight_other);
+    
+    assert(offset == nfeatures);
+    
+    database_build_bounds(db);
+}
+
+// pushed
+void pushed_database_build_matching_features(
+    database& db2,
+    database& db,
+    const float feature_weight_other,
+    const float feature_weight_motion_idx)
+{
+    int nfeatures =
+        2 + // relative position
+        2 + // relative rotation 
+        1 ; // motion_idx
+        
+    db2.features.resize(db2.nframes(), nfeatures);
+    db2.features_offset.resize(nfeatures);
+    db2.features_scale.resize(nfeatures);
+    
+    int offset = 0;
+    compute_other_position_feature(db2, db, offset, feature_weight_other);
+    compute_other_rotation_feature(db2, db, offset, feature_weight_other);
+    compute_motion_idx_feature(db2, offset, feature_weight_motion_idx);
+
+    assert(offset == nfeatures);
+    
+    database_build_bounds(db2);
+}
+
+//-------------------------------------------------------------------------------------------------------------
 
 // Motion Matching search function essentially consists
 // of comparing every feature vector in the database, 
