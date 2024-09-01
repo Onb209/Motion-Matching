@@ -28,8 +28,8 @@ If you re-generate the database you will also need to re-generate the matching d
 
 # Additional Implementation of Motion Matching Demo
 * Terrain (using the arrow keys)
-* Sitting on a Chair (using the 'S' keys)
-* Pushing (using the 'S' keys)
+* Sitting on a Chair (using the `S` keys)
+* Pushing (using the `S` keys)
   
-'cd Motion-Matching_add'
-'make run'
+`cd Motion-Matching_add`
+`make run`
