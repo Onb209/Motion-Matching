@@ -27,9 +27,9 @@ The data required if you want to regenerate the animation database is from [this
 If you re-generate the database you will also need to re-generate the matching database `features.bin`, which is done every time you re-run the demo. Similarly if you change the weights or any other properties that affect the matching the database will need to be re-generated and the networks re-trained.
 
 # Additional Implementation of Motion Matching Demo
-* Terrain
-* Sitting on a Chair
-* Pushing
+* Terrain (using the arrow keys)
+* Sitting on a Chair (using the 'S' keys)
+* Pushing (using the 'S' keys)
   
-  cd Motion-Matching_add
-  make run
+'cd Motion-Matching_add'
+'make run'
