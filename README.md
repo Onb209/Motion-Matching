@@ -31,6 +31,6 @@ If you re-generate the database you will also need to re-generate the matching d
 * Sitting on a Chair (using the `S` keys)
 * Pushing (using the `S` keys)
   
-`cd Motion-Matching_add`
+  `cd Motion-Matching_add`
 
-`make run`
+  `make run`
